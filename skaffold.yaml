@@ -1,0 +1,212 @@
+apiVersion: skaffold/v4beta11
+kind: Config
+metadata:
+  name: gin-webserver
+
+# Build configuration
+build:
+  artifacts:
+    - image: gin-webserver
+      context: .
+      docker:
+        dockerfile: dockerfiles/multi-stage/Dockerfile
+        target: runtime
+        buildArgs:
+          GO_VERSION: "1.21"
+          APP_VERSION: "{{.SKAFFOLD_VERSION}}"
+      sync:
+        manual:
+          - src: "**/*.go"
+            dest: /app/
+            strip: ""
+          - src: "go.mod"
+            dest: /app/
+          - src: "go.sum"
+            dest: /app/
+  local:
+    useDockerCLI: false
+    useBuildkit: true
+  tagPolicy:
+    envTemplate:
+      template: "{{.IMAGE_NAME}}:{{.SKAFFOLD_VERSION}}-{{.USER}}"
+
+# Deploy configuration using Helm
+deploy:
+  helm:
+    releases:
+      - name: gin-webserver
+        chartPath: helm/gin-webserver
+        namespace: gin-webserver
+        createNamespace: true
+        valuesFiles:
+          - helm/gin-webserver/values.yaml
+        setValues:
+          image.tag: "{{.SKAFFOLD_VERSION}}-{{.USER}}"
+        wait: true
+        recreatePods: false
+        skipBuildDependencies: false
+
+# Development profiles
+profiles:
+  # Development profile with file sync and port forwarding
+  - name: dev
+    build:
+      artifacts:
+        - image: gin-webserver
+          context: .
+          docker:
+            dockerfile: dockerfiles/multi-stage/Dockerfile
+            target: development  # Use development stage
+            buildArgs:
+              GO_VERSION: "1.21"
+              APP_VERSION: "{{.SKAFFOLD_VERSION}}-dev"
+          sync:
+            manual:
+              - src: "**/*.go"
+                dest: /app/
+                strip: ""
+              - src: "go.mod"
+                dest: /app/
+              - src: "go.sum"
+                dest: /app/
+    deploy:
+      helm:
+        releases:
+          - name: gin-webserver-dev
+            chartPath: helm/gin-webserver
+            namespace: gin-webserver-dev
+            createNamespace: true
+            valuesFiles:
+              - helm/gin-webserver/values.yaml
+              - helm/gin-webserver/values-dev.yaml
+            setValues:
+              image.tag: "{{.SKAFFOLD_VERSION}}-dev"
+              image.pullPolicy: Always
+            wait: true
+            recreatePods: false
+    portForward:
+      - resourceType: service
+        resourceName: gin-webserver-dev
+        namespace: gin-webserver-dev
+        port: 80
+        localPort: 8080
+
+  # Production profile with minimal image
+  - name: prod
+    build:
+      artifacts:
+        - image: gin-webserver
+          context: .
+          docker:
+            dockerfile: dockerfiles/minimal/Dockerfile
+            buildArgs:
+              GO_VERSION: "1.21"
+              APP_VERSION: "{{.SKAFFOLD_VERSION}}-prod"
+    deploy:
+      helm:
+        releases:
+          - name: gin-webserver-prod
+            chartPath: helm/gin-webserver
+            namespace: gin-webserver-prod
+            createNamespace: true
+            valuesFiles:
+              - helm/gin-webserver/values.yaml
+              - helm/gin-webserver/values-prod.yaml
+            setValues:
+              image.tag: "{{.SKAFFOLD_VERSION}}-prod"
+            wait: true
+            recreatePods: false
+
+  # Multi-architecture profile
+  - name: multiarch
+    build:
+      artifacts:
+        - image: gin-webserver
+          context: .
+          docker:
+            dockerfile: dockerfiles/multi-arch/Dockerfile
+            buildArgs:
+              GO_VERSION: "1.21"
+              APP_VERSION: "{{.SKAFFOLD_VERSION}}-multiarch"
+          platforms:
+            - "linux/amd64"
+            - "linux/arm64"
+    deploy:
+      helm:
+        releases:
+          - name: gin-webserver-multiarch
+            chartPath: helm/gin-webserver
+            namespace: gin-webserver-multiarch
+            createNamespace: true
+            valuesFiles:
+              - helm/gin-webserver/values.yaml
+            setValues:
+              image.tag: "{{.SKAFFOLD_VERSION}}-multiarch"
+              replicaCount: 2
+            wait: true
+            recreatePods: false
+
+  # Local development with hot reload
+  - name: local
+    build:
+      artifacts:
+        - image: gin-webserver
+          context: .
+          docker:
+            dockerfile: dockerfiles/multi-stage/Dockerfile
+            target: development
+            buildArgs:
+              GO_VERSION: "1.21"
+              APP_VERSION: "local"
+          sync:
+            manual:
+              - src: "**/*.go"
+                dest: /app/
+                strip: ""
+              - src: "go.mod"
+                dest: /app/
+              - src: "go.sum"
+                dest: /app/
+    deploy:
+      helm:
+        releases:
+          - name: gin-webserver-local
+            chartPath: helm/gin-webserver
+            namespace: default
+            valuesFiles:
+              - helm/gin-webserver/values.yaml
+              - helm/gin-webserver/values-dev.yaml
+            setValues:
+              image.tag: "local"
+              image.pullPolicy: Never
+              replicaCount: 1
+              ingress.enabled: false
+            wait: true
+            recreatePods: false
+    portForward:
+      - resourceType: service
+        resourceName: gin-webserver-local
+        namespace: default
+        port: 80
+        localPort: 8080
+
+# Test configuration
+test:
+  - image: gin-webserver
+    command: ["go", "test", "./..."]
+    env:
+      - name: CGO_ENABLED
+        value: "0"
+
+# File watcher configuration
+fileSyncer:
+  manual: true
+
+# Verify configuration
+verify:
+  - name: health-check
+    container:
+      name: health-check
+      image: curlimages/curl:latest
+      command: ["curl"]
+      args: ["-f", "http://gin-webserver.gin-webserver/health"]
