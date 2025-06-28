@@ -364,14 +364,492 @@ docker exec -it <container-id> /bin/sh
 
 ## Kubernetes
 
-Deploy to k8s
+This section demonstrates different approaches to deploying the gin-webserver to Kubernetes, from basic raw manifests to advanced GitOps workflows with skaffold and argocd
 
-### raw manifests 
+### Prerequisites
 
-> not recommended
+- Kubernetes cluster (local: minikube, kind, k3s, or cloud: EKS, GKE, AKS)
+- `kubectl` configured to connect to your cluster
+- Helm 3.x installed
+- Docker registry access (Docker Hub, ECR, GCR, etc.)
 
-### Helm
+### Raw Kubernetes Manifests
 
+> **Note:** While functional for learning, raw manifests are not recommended for production. Use Helm or Kustomize instead.
 
+Basic deployment using vanilla Kubernetes YAML files.
 
-### Skaffold
+**Location:** `k8s/raw-manifests/`
+
+#### Files included:
+
+- `namespace.yaml` - Dedicated namespace for the application
+- `deployment.yaml` - Application deployment with resource limits
+- `service.yaml` - ClusterIP service for internal communication
+- `ingress.yaml` - Ingress for external access
+- `configmap.yaml` - Configuration data
+- `secret.yaml` - Sensitive configuration (base64 encoded)
+- `hpa.yaml` - Horizontal Pod Autoscaler
+- `networkpolicy.yaml` - Network security policies
+
+#### Deploy raw manifests:
+
+```bash
+# Apply all manifests
+kubectl apply -f ./k8s-manifests/
+
+# Verify deployment
+kubectl get pods -n gin-webserver
+kubectl get svc -n gin-webserver
+
+# Check application logs
+kubectl logs -l app=gin-webserver -n gin-webserver
+
+# Port forward to test locally
+kubectl port-forward svc/gin-webserver 8080:80 -n gin-webserver
+
+# Test the application
+curl http://localhost:8080/health
+
+# Clean up
+kubectl delete -f k8s/raw-manifests/
+```
+
+#### When to use raw manifests
+
+- Learning Kubernetes fundamentals
+- Simple, one-off deployments or prototypes
+- CI/CD pipelines with template substitution
+- When you need maximum control over every detail
+
+### Helm Charts
+
+Helm provides templating, versioning, and lifecycle management for Kubernetes applications.
+
+**Location:** `helm/gin-webserver/`
+
+#### Chart Structure:
+```
+helm/gin-webserver/
+├── Chart.yaml           # Chart metadata
+├── values.yaml          # Default configuration values
+├── values-dev.yaml      # Development environment overrides
+├── values-staging.yaml  # Staging environment overrides  
+├── values-prod.yaml     # Production environment overrides
+├── templates/
+│   ├── deployment.yaml  # Deployment template
+│   ├── service.yaml     # Service template
+│   ├── ingress.yaml     # Ingress template
+│   ├── configmap.yaml   # ConfigMap template
+│   ├── secret.yaml      # Secret template
+│   ├── hpa.yaml         # HPA template
+│   ├── pdb.yaml         # PodDisruptionBudget template
+│   ├── networkpolicy.yaml # NetworkPolicy template
+│   ├── serviceaccount.yaml # ServiceAccount template
+│   ├── rbac.yaml        # RBAC templates
+│   └── tests/
+│       └── test-connection.yaml # Helm tests
+├── charts/              # Dependency charts (if any)
+└── crds/               # Custom Resource Definitions
+```
+
+#### Key Helm Features Demonstrated:
+
+**Templating and Values:**
+- Environment-specific value files
+- Conditional resource creation
+- Dynamic configuration based on environment
+- Resource scaling based on environment type
+
+**Security Features:**
+- RBAC configuration
+- Pod Security Contexts
+- Network Policies
+- Secret management
+
+**Reliability Features:**
+- Health checks and probes
+- Resource limits and requests
+- Pod Disruption Budgets
+- Horizontal Pod Autoscaling
+
+#### Deploy with Helm:
+
+```bash
+# Add dependencies (if any)
+helm dependency update helm/gin-webserver
+
+# Install to development environment
+helm install gin-webserver-dev helm/gin-webserver \
+  -f helm/gin-webserver/values-dev.yaml \
+  --namespace gin-webserver-dev \
+  --create-namespace
+
+# Install to production environment
+helm install gin-webserver-prod helm/gin-webserver \
+  -f helm/gin-webserver/values-prod.yaml \
+  --namespace gin-webserver-prod \
+  --create-namespace
+
+# Override specific values
+helm install gin-webserver helm/gin-webserver \
+  --set image.tag=v1.2.0 \
+  --set replicaCount=3 \
+  --set ingress.enabled=true
+
+# Upgrade deployment
+helm upgrade gin-webserver-prod helm/gin-webserver \
+  -f helm/gin-webserver/values-prod.yaml
+
+# Check deployment status
+helm status gin-webserver-prod
+helm list -A
+
+# Run Helm tests
+helm test gin-webserver-prod
+
+# Rollback if needed
+helm rollback gin-webserver-prod 1
+
+# Uninstall
+helm uninstall gin-webserver-prod --namespace gin-webserver-prod
+```
+
+#### Helm Training Exercises:
+
+1. **Basic Deployment:**
+   ```bash
+   # Deploy with default values
+   helm install my-gin helm/gin-webserver
+   
+   # Check what was created
+   kubectl get all -l app.kubernetes.io/instance=my-gin
+   ```
+
+2. **Environment Customization:**
+  The following generates k8s manifests
+  
+   ```bash
+   # Compare different environment configurations
+   helm template gin-webserver helm/gin-webserver -f helm/gin-webserver/values-dev.yaml
+   helm template gin-webserver helm/gin-webserver -f helm/gin-webserver/values-prod.yaml
+   ```
+
+3. **Value Overrides:**
+   ```bash
+   # Practice overriding values
+   helm install test-gin helm/gin-webserver \
+     --set image.tag=latest \
+     --set service.type=NodePort \
+     --set ingress.enabled=false \
+     --dry-run --debug
+   ```
+
+4. **Upgrade and Rollback:**
+   ```bash
+   # Simulate production upgrade
+   helm upgrade test-gin helm/gin-webserver --set image.tag=v2.0.0
+   helm history test-gin
+   helm rollback test-gin 1
+   ```
+
+#### Advanced Helm Features:
+
+**Chart Dependencies:**
+```yaml
+# Chart.yaml
+dependencies:
+  - name: postgresql
+    version: "12.1.9"
+    repository: "https://charts.bitnami.com/bitnami"
+    condition: postgresql.enabled
+  - name: redis
+    version: "17.4.3"
+    repository: "https://charts.bitnami.com/bitnami"
+    condition: redis.enabled
+```
+
+**Helm Hooks for Advanced Lifecycle Management:**
+- Pre-install hooks for database migrations
+- Post-install hooks for configuration
+- Pre-upgrade hooks for backup
+- Test hooks for validation
+
+#### When to use Helm:
+- Multi-environment deployments
+- Complex applications with many components
+- When you need versioning and rollback capabilities
+- Team collaboration on Kubernetes deployments
+- Production workloads
+
+### Kustomize (Alternative to Helm)
+
+**Location:** `k8s/kustomize/`
+
+Kustomize provides declarative configuration management without templating:
+
+```bash
+# Base configuration
+kustomize build k8s/kustomize/base
+
+# Environment-specific overlays
+kustomize build k8s/kustomize/overlays/development
+kustomize build k8s/kustomize/overlays/production
+
+# Apply with kubectl
+kubectl apply -k k8s/kustomize/overlays/production
+```
+
+### Monitoring and Observability
+
+#### Prometheus Metrics:
+The application exposes metrics at `/metrics` endpoint for Prometheus scraping.
+
+```bash
+# Add Prometheus annotations to deployment
+kubectl annotate deployment gin-webserver prometheus.io/scrape=true
+kubectl annotate deployment gin-webserver prometheus.io/port=8080
+kubectl annotate deployment gin-webserver prometheus.io/path=/metrics
+```
+
+#### Logging:
+Structured JSON logging is configured for easy parsing by log aggregators:
+
+```bash
+# View application logs
+kubectl logs -l app=gin-webserver --tail=100 -f
+
+# Export logs to file
+kubectl logs -l app=gin-webserver --since=1h > app-logs.json
+```
+
+#### Health Checks:
+Multiple health check endpoints for different purposes:
+- `/health` - Basic health endpoint
+- `/readiness` - Readiness probe endpoint
+- `/liveness` - Liveness probe endpoint
+
+### Security Best Practices
+
+#### Pod Security:
+```yaml
+# Implemented in Helm templates
+securityContext:
+  runAsNonRoot: true
+  runAsUser: 65534
+  fsGroup: 65534
+  capabilities:
+    drop:
+      - ALL
+  readOnlyRootFilesystem: true
+```
+
+#### Network Security:
+```bash
+# Network policies are included in both raw manifests and Helm charts
+kubectl get networkpolicy -n gin-webserver
+```
+
+#### Secret Management:
+```bash
+# Use external secret management in production
+# Examples for different secret managers:
+
+# AWS Secrets Manager
+kubectl apply -f k8s/external-secrets/aws-secrets.yaml
+
+# HashiCorp Vault
+kubectl apply -f k8s/external-secrets/vault-secrets.yaml
+
+# Azure Key Vault
+kubectl apply -f k8s/external-secrets/azure-keyvault.yaml
+```
+
+### Troubleshooting Commands
+
+```bash
+# Check pod status and events
+kubectl get pods -n gin-webserver -o wide
+kubectl describe pod <pod-name> -n gin-webserver
+
+# Check service and endpoints
+kubectl get svc,endpoints -n gin-webserver
+
+# Check ingress configuration
+kubectl get ingress -n gin-webserver -o yaml
+
+# View recent events
+kubectl get events -n gin-webserver --sort-by='.lastTimestamp'
+
+# Debug network connectivity
+kubectl run debug --image=nicolaka/netshoot -it --rm
+
+# Check resource usage
+kubectl top pods -n gin-webserver
+kubectl top nodes
+```
+
+### Skaffold - Development Workflow
+
+**Location:** `skaffold.yaml`
+
+Skaffold automates the development workflow for Kubernetes applications.
+
+#### Features:
+- Automatic image building and deployment
+- File watching for hot reloading
+- Port forwarding
+- Log streaming
+- Multiple environment profiles
+
+#### Skaffold Configuration:
+```yaml
+# skaffold.yaml example structure
+apiVersion: skaffold/v4beta1
+kind: Config
+metadata:
+  name: gin-webserver
+  
+build:
+  artifacts:
+  - image: gin-webserver
+    docker:
+      dockerfile: dockerfiles/2-multi-stage/Dockerfile
+  local:
+    push: false
+    
+deploy:
+  helm:
+    releases:
+    - name: gin-webserver-dev
+      chartPath: helm/gin-webserver
+      valuesFiles:
+      - helm/gin-webserver/values-dev.yaml
+      namespace: gin-webserver-dev
+      createNamespace: true
+      
+portForward:
+- resourceType: service
+  resourceName: gin-webserver
+  namespace: gin-webserver-dev
+  port: 8080
+  localPort: 8080
+
+profiles:
+- name: production
+  deploy:
+    helm:
+      releases:
+      - name: gin-webserver-prod
+        chartPath: helm/gin-webserver
+        valuesFiles:
+        - helm/gin-webserver/values-prod.yaml
+        namespace: gin-webserver-prod
+```
+
+#### Using Skaffold:
+
+```bash
+# Development mode with file watching
+skaffold dev
+
+# Build and deploy once
+skaffold run
+
+# Deploy to production profile
+skaffold run -p production
+
+# Debug mode
+skaffold debug
+
+# Clean up
+skaffold delete
+```
+
+#### Skaffold Training Exercises:
+
+1. **Development Workflow:**
+   ```bash
+   # Start development mode
+   skaffold dev
+   
+   # In another terminal, make changes to main.go
+   # Watch Skaffold automatically rebuild and redeploy
+   ```
+
+2. **Profile Switching:**
+   ```bash
+   # Switch between development and production profiles
+   skaffold run -p development
+   skaffold run -p production
+   ```
+
+3. **Debugging:**
+   ```bash
+   # Enable debug mode for troubleshooting
+   skaffold debug --port-forward
+   ```
+
+### GitOps with ArgoCD (Advanced)
+
+**Location:** `gitops/argocd/`
+
+For production environments, consider implementing GitOps workflows:
+
+```yaml
+# Application definition for ArgoCD
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: gin-webserver-prod
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/your-org/gin-webserver
+    targetRevision: main
+    path: helm/gin-webserver
+    helm:
+      valueFiles:
+      - values-prod.yaml
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: gin-webserver-prod
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+    - CreateNamespace=true
+```
+
+### Kubernetes Training Progression
+
+**Beginner Level:**
+1. Deploy using raw manifests
+2. Understand pods, services, and deployments
+3. Practice kubectl commands
+4. Learn about namespaces and labels
+
+**Intermediate Level:**
+1. Create and customize Helm charts
+2. Use different value files for environments
+3. Implement health checks and resource limits
+4. Practice upgrades and rollbacks
+
+**Advanced Level:**
+1. Implement comprehensive monitoring
+2. Set up GitOps workflows
+3. Configure security policies
+4. Optimize for production workloads
+5. Implement CI/CD pipelines
+
+**Production Checklist:**
+- [ ] Resource limits and requests configured
+- [ ] Health checks implemented (liveness, readiness, startup)
+- [ ] Monitoring and alerting configured
+- [ ] Security contexts and policies applied
+- [ ] Network policies implemented
+- [ ] Backup and disaster recovery plan
+- [ ] GitOps workflow established
+- [ ] Documentation and runbooks created
